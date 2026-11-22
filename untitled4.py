@@ -2,6 +2,7 @@ import os
 import glob
 import streamlit as st
 import pandas as pd
+from PIL import Image
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -53,6 +54,18 @@ with st.container(border=True):
     st.subheader("Patient & Lesion Details")
     st.caption(f"Model Accuracy on Metadata: {acc * 100:.2f}%")
 
+    # Patient Name input (dx ki jagah)
+    patient_name = st.text_input("Patient Name", placeholder="Enter patient full name")
+
+    # Image upload box
+    uploaded_image = st.file_uploader(
+        "Upload Skin Lesion Image",
+        type=["jpg", "jpeg", "png"]
+    )
+    if uploaded_image is not None:
+        img = Image.open(uploaded_image)
+        st.image(img, caption="Uploaded Skin Image", use_container_width=True)
+
     user_input = {}
 
     for col in feature_cols:
@@ -92,6 +105,9 @@ with st.container(border=True):
         probs = model.predict_proba(input_aligned)[0]
         confidence = max(probs) * 100
 
+        display_name = patient_name.strip() if patient_name.strip() else "Unnamed Patient"
+
         st.divider()
-        st.success(f"**Predicted Diagnosis (`dx`):** `{prediction}`")
+        st.success(f"**Patient Name:** {display_name}")
+        st.info(f"**Detected Result:** `{prediction}`")
         st.write(f"**Confidence:** {confidence:.2f}%")
