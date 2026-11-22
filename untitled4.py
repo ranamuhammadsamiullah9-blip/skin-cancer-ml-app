@@ -2,72 +2,96 @@ import os
 import glob
 import streamlit as st
 import pandas as pd
-import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 
-# Page configuration
-st.set_page_config(page_title="Skin Cancer ML App", layout="centered")
-st.title("Skin Cancer Prediction App")
+st.set_page_config(page_title="Skin Cancer Detector", layout="centered")
+st.title("Skin Cancer Detector")
 
-# 1. Automatic CSV File Finder (FileNotFoundError se bachne ke liye)
+# 1. CSV file automatically locate karein
 base_dir = os.path.dirname(os.path.abspath(__file__))
 csv_files = glob.glob(os.path.join(base_dir, "**", "*.csv"), recursive=True)
 
-df = None
+if not csv_files:
+    st.error("HAM10000_metadata.csv file repository mein nahi mili.")
+    st.stop()
 
-if csv_files:
-    # Agar GitHub repo mein koi CSV file maujood hai to pehli CSV load karega
-    dfp = csv_files[0]
-    df = pd.read_csv(dfp)
-    st.success(f"Dataset loaded successfully: `{os.path.basename(dfp)}`")
-else:
-    # Agar GitHub repo mein CSV upload nahi hui, to manual upload ka option dega
-    st.warning("Repository mein koi CSV file nahi mili. Neeche apni dataset CSV file upload karein:")
-    uploaded_file = st.file_uploader("Upload CSV Dataset", type=["csv"])
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
+df = pd.read_csv(csv_files[0])
 
-# 2. Data Processing & Model Training
-if df is not None:
-    st.subheader("Dataset Preview")
-    st.dataframe(df.head())
+# Target column ('dx') aur irrelevant ID columns handle karein
+target_col = "dx" if "dx" in df.columns else df.columns[-1]
+drop_cols = [c for c in ["lesion_id", "image_id", target_col] if c in df.columns]
 
-    # Target column select karein (default aakhri column hoga)
-    target_col = st.selectbox(
-        "Target Column (Label) select karein:",
-        options=df.columns,
-        index=len(df.columns) - 1
-    )
+# Data clean aur encode karein
+clean_df = df.dropna(subset=[target_col]).copy()
+feature_cols = [c for c in clean_df.columns if c not in drop_cols]
 
-    # Sirf numeric features aur non-null rows lein
-    data = df.dropna().copy()
-    X = pd.get_dummies(data.drop(columns=[target_col]), drop_first=True)
-    y = data[target_col]
+X_raw = clean_df[feature_cols].copy()
+for col in X_raw.select_dtypes(include=["object", "category"]).columns:
+    X_raw[col] = X_raw[col].fillna("unknown").astype(str)
+for col in X_raw.select_dtypes(exclude=["object", "category"]).columns:
+    X_raw[col] = X_raw[col].fillna(X_raw[col].median())
 
-    # Train-Test Split
+X = pd.get_dummies(X_raw, drop_first=False)
+y = clean_df[target_col].astype(str)
+
+@st.cache_resource
+def train_detector(features_df, target_series):
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        features_df, target_series, test_size=0.2, random_state=42
     )
+    clf = RandomForestClassifier(n_estimators=150, random_state=42, n_jobs=-1)
+    clf.fit(X_train, y_train)
+    acc = accuracy_score(y_test, clf.predict(X_test))
+    return clf, acc
 
-    # Model Training
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+model, acc = train_detector(X, y)
 
-    # Accuracy Display
-    y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    st.metric(label="Model Accuracy", value=f"{acc * 100:.2f}%")
+# 2. Skin Cancer Detector Box
+with st.container(border=True):
+    st.subheader("Patient & Lesion Details")
+    st.caption(f"Model Accuracy on Metadata: {acc * 100:.2f}%")
 
-    # 3. Prediction Form
-    st.subheader("New Prediction")
-    input_data = {}
-    for col in X.columns:
-        val = float(X[col].median())
-        input_data[col] = st.number_input(f"{col}", value=val)
+    user_input = {}
 
-    if st.button("Predict"):
-        input_df = pd.DataFrame([input_data])
-        prediction = model.predict(input_df)[0]
-        st.info(f"Predicted Result: **{prediction}**")
+    for col in feature_cols:
+        if col not in clean_df.columns:
+            continue
+        series = clean_df[col]
+        if pd.api.types.is_numeric_dtype(series):
+            default_val = float(series.median()) if not series.dropna().empty else 0.0
+            min_val = float(series.min()) if not series.dropna().empty else 0.0
+            max_val = float(series.max()) if not series.dropna().empty else 100.0
+            user_input[col] = st.number_input(
+                label=col.replace("_", " ").title(),
+                min_value=min_val,
+                max_value=max_val,
+                value=default_val
+            )
+        else:
+            options = sorted(series.dropna().astype(str).unique().tolist())
+            if not options:
+                options = ["unknown"]
+            user_input[col] = st.selectbox(
+                label=col.replace("_", " ").title(),
+                options=options
+            )
+
+    predict_clicked = st.button("Detect Skin Condition", type="primary", use_container_width=True)
+
+    if predict_clicked:
+        input_row_df = pd.DataFrame([user_input])
+        for col in input_row_df.select_dtypes(include=["object", "category"]).columns:
+            input_row_df[col] = input_row_df[col].astype(str)
+
+        input_encoded = pd.get_dummies(input_row_df, drop_first=False)
+        input_aligned = input_encoded.reindex(columns=X.columns, fill_value=0)
+
+        prediction = model.predict(input_aligned)[0]
+        probs = model.predict_proba(input_aligned)[0]
+        confidence = max(probs) * 100
+
+        st.divider()
+        st.success(f"**Predicted Diagnosis (`dx`):** `{prediction}`")
+        st.write(f"**Confidence:** {confidence:.2f}%")
