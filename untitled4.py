@@ -20,9 +20,12 @@ if not csv_files:
 
 df = pd.read_csv(csv_files[0])
 
-# Target column ('dx') aur irrelevant ID columns handle karein
+# Target column ('dx'), irrelevant ID columns aur 'localization' remove karein
 target_col = "dx" if "dx" in df.columns else df.columns[-1]
-drop_cols = [c for c in ["lesion_id", "image_id", target_col] if c in df.columns]
+drop_cols = [
+    c for c in ["lesion_id", "image_id", "localization", target_col]
+    if c in df.columns
+]
 
 # Data clean aur encode karein
 clean_df = df.dropna(subset=[target_col]).copy()
